@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion><ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>K4os.Compression.LZ4</AssemblyName>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)src/lz4/src/K4os.Compression.LZ4/**/*.cs" Exclude="$(MSBuildThisFileDirectory)src/lz4/src/K4os.Compression.LZ4/obj/**;$(MSBuildThisFileDirectory)src/lz4/src/K4os.Compression.LZ4/bin/**" />
+  </ItemGroup>
+</Project>

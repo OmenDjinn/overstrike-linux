@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    overstrike-cli: a Linux command-line front end for Overstrike's mod installers.
+    Overstrike's own source (https://github.com/Tkachov/Overstrike) is compiled in directly,
+    minus the WPF GUI. build.sh clones it into ../upstream/Overstrike and applies patches/.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>overstrike-cli</AssemblyName>
+    <RootNamespace>Overstrike</RootNamespace>
+    <Version>0.2.0</Version>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA2022;CS0168;CS0219;CS0414;CS0649;CS0169;CS8632;CA1416;SYSLIB0011</NoWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- where Overstrike's source lives -->
+    <OverstrikeSrc Condition="'$(OverstrikeSrc)' == ''">$(MSBuildThisFileDirectory)../upstream/Overstrike</OverstrikeSrc>
+    <!-- true: build SharpCompress/K4os.LZ4 from source in ../vendor (offline builds); false: use NuGet -->
+    <UseVendoredDeps Condition="'$(UseVendoredDeps)' == ''">false</UseVendoredDeps>
+    <SystemIOHashingVersion Condition="'$(SystemIOHashingVersion)' == ''">9.0.0</SystemIOHashingVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="*.cs;Compat/**/*.cs" />
+    <Compile Include="$(OverstrikeSrc)/GDeflateWrapper/GDeflate.cs" Link="Upstream/GDeflate.cs" />
+    <Compile Include="$(OverstrikeSrc)/DAT1/**/*.cs" Exclude="$(OverstrikeSrc)/DAT1/obj/**;$(OverstrikeSrc)/DAT1/bin/**" LinkBase="Upstream/DAT1" />
+    <Compile Include="$(OverstrikeSrc)/OverstrikeShared/**/*.cs" Exclude="$(OverstrikeSrc)/OverstrikeShared/obj/**;$(OverstrikeSrc)/OverstrikeShared/bin/**;$(OverstrikeSrc)/OverstrikeShared/Windows/**;$(OverstrikeSrc)/OverstrikeShared/Utils/Clipboard.cs;$(OverstrikeSrc)/OverstrikeShared/Utils/Imaging.cs" LinkBase="Upstream/OverstrikeShared" />
+    <Compile Include="$(OverstrikeSrc)/Overstrike/AppSettings.cs;$(OverstrikeSrc)/Overstrike/Data/**/*.cs;$(OverstrikeSrc)/Overstrike/Detectors/**/*.cs;$(OverstrikeSrc)/Overstrike/Games/**/*.cs;$(OverstrikeSrc)/Overstrike/Installers/**/*.cs;$(OverstrikeSrc)/Overstrike/MetaInstallers/**/*.cs;$(OverstrikeSrc)/Overstrike/Utils/**/*.cs" Exclude="$(OverstrikeSrc)/Overstrike/Utils/DragDrop.cs;$(OverstrikeSrc)/Overstrike/Utils/Imaging.cs" LinkBase="Upstream/Overstrike" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- NVIDIA's libdeflate fork with GDeflate support, built by build.sh -->
+    <None Include="../native/libdeflate_gdeflate.so" CopyToOutputDirectory="PreserveNewest" Link="libdeflate_gdeflate.so" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="System.IO.Hashing" Version="$(SystemIOHashingVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseVendoredDeps)' != 'true'">
+    <PackageReference Include="SharpCompress" Version="0.50.1" />
+    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseVendoredDeps)' == 'true'">
+    <ProjectReference Include="../vendor/SharpCompress.csproj" />
+    <ProjectReference Include="../vendor/K4os.Compression.LZ4.csproj" />
+  </ItemGroup>
+</Project>

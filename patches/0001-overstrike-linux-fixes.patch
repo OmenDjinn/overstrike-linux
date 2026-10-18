@@ -1,0 +1,196 @@
+diff --git a/DAT1/GamePaths.cs b/DAT1/GamePaths.cs
+new file mode 100644
+index 0000000..9b5ce1e
+--- /dev/null
++++ b/DAT1/GamePaths.cs
+@@ -0,0 +1,42 @@
++// Overstrike -- an open-source mod manager for PC ports of Insomniac Games' games.
++// This program is free software, and can be redistributed and/or modified by you. It is provided 'as-is', without any warranty.
++// For more details, terms and conditions, see GNU General Public License.
++// A copy of the that license should come with this program (LICENSE.txt). If not, see <http://www.gnu.org/licenses/>.
++
++using System;
++using System.IO;
++
++namespace DAT1 {
++	// Archive names inside 'toc' are Windows-style ("d\mods\mod0"). On Windows they can be
++	// passed to Path.Combine as-is, but on Linux '\' is a regular filename character and
++	// the filesystem is case-sensitive. This helper turns such a name into a real path.
++	public static class GamePaths {
++		public static string Resolve(string basePath, string tocRelativePath) {
++			if (Path.DirectorySeparatorChar == '\\') {
++				return Path.Combine(basePath, tocRelativePath);
++			}
++
++			var parts = tocRelativePath.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
++			var current = basePath;
++			for (var i = 0; i < parts.Length; ++i) {
++				var exact = Path.Combine(current, parts[i]);
++				if (File.Exists(exact) || Directory.Exists(exact) || !Directory.Exists(current)) {
++					current = exact;
++					continue;
++				}
++
++				// fall back to a case-insensitive match, like Windows would do
++				string match = null;
++				foreach (var entry in Directory.EnumerateFileSystemEntries(current)) {
++					if (Path.GetFileName(entry).Equals(parts[i], StringComparison.OrdinalIgnoreCase)) {
++						match = entry;
++						break;
++					}
++				}
++				current = match ?? exact;
++			}
++
++			return current;
++		}
++	}
++}
+diff --git a/DAT1/TOC.cs b/DAT1/TOC.cs
+index 57c1fea..6519f00 100644
+--- a/DAT1/TOC.cs
++++ b/DAT1/TOC.cs
+@@ -188,7 +188,7 @@ namespace DAT1 {
+ 		public abstract string GetArchiveFilename(uint index);
+ 
+ 		protected virtual FileStream OpenArchive(string fn) {
+-			string full = Path.Combine(AssetArchivePath, fn);
++			string full = GamePaths.Resolve(AssetArchivePath, fn);
+ 			return File.OpenRead(full);
+ 		}
+ 
+diff --git a/GDeflateWrapper/GDeflate.cs b/GDeflateWrapper/GDeflate.cs
+index daf27b1..128bf38 100644
+--- a/GDeflateWrapper/GDeflate.cs
++++ b/GDeflateWrapper/GDeflate.cs
+@@ -56,22 +56,27 @@ namespace GDeflateWrapper {
+ 
+ 		public unsafe static uint DecompressTile(byte[] source, byte[] target) {
+ 			void* decompressor = Imports.libdeflate_alloc_gdeflate_decompressor();
++			if (decompressor == null) throw new Exception("libdeflate: failed to allocate GDeflate decompressor");
+ 
+-			fixed (byte* data = &source[0]) {
+-				Imports.libdeflate_gdeflate_in_page libdeflate_gdeflate_in_page = default;
+-				libdeflate_gdeflate_in_page.data = data;
+-				libdeflate_gdeflate_in_page.nbytes = (uint)source.Length;
++			try {
++				fixed (byte* data = &source[0]) {
++					Imports.libdeflate_gdeflate_in_page libdeflate_gdeflate_in_page = default;
++					libdeflate_gdeflate_in_page.data = data;
++					libdeflate_gdeflate_in_page.nbytes = (nuint)source.Length;
+ 
+-				fixed (byte* output = &target[0]) {
+-					uint actualRead = 0;
+-					var result = Imports.libdeflate_gdeflate_decompress(decompressor, &libdeflate_gdeflate_in_page, 1, output, 65536, &actualRead);
++					fixed (byte* output = &target[0]) {
++						nuint actualRead = 0;
++						var result = Imports.libdeflate_gdeflate_decompress(decompressor, &libdeflate_gdeflate_in_page, 1, output, 65536, &actualRead);
+ 
+-					if (result != Imports.libdeflate_result.LIBDEFLATE_SUCCESS) {
+-						throw new Exception($"libdeflate error: {result}");
+-					}
++						if (result != Imports.libdeflate_result.LIBDEFLATE_SUCCESS) {
++							throw new Exception($"libdeflate error: {result}");
++						}
+ 
+-					return actualRead;
++						return (uint)actualRead;
++					}
+ 				}
++			} finally {
++				Imports.libdeflate_free_gdeflate_decompressor(decompressor);
+ 			}
+ 		}
+ 
+@@ -96,7 +101,7 @@ namespace GDeflateWrapper {
+ 
+ 		internal struct libdeflate_gdeflate_in_page {
+ 			public unsafe void* data;
+-			public uint nbytes;
++			public nuint nbytes; // size_t
+ 		}
+ 
+ 		[DllImport(DllName, CallingConvention = CallingConvention.StdCall)]
+@@ -106,6 +111,6 @@ namespace GDeflateWrapper {
+ 		internal unsafe static extern void libdeflate_free_gdeflate_decompressor(void* decomp);
+ 
+ 		[DllImport(DllName, CallingConvention = CallingConvention.StdCall)]
+-		internal unsafe static extern libdeflate_result libdeflate_gdeflate_decompress(void* decomp, libdeflate_gdeflate_in_page* in_pages, uint in_npages, void* output, uint out_nbytes_avail, uint* actual_out_nbytes_ret);
++		internal unsafe static extern libdeflate_result libdeflate_gdeflate_decompress(void* decomp, libdeflate_gdeflate_in_page* in_pages, nuint in_npages, void* output, nuint out_nbytes_avail, nuint* actual_out_nbytes_ret); // size_t params
+ 	}
+ }
+diff --git a/Overstrike/Detectors/StageModDetector.cs b/Overstrike/Detectors/StageModDetector.cs
+index 0ee816e..465fc7a 100644
+--- a/Overstrike/Detectors/StageModDetector.cs
++++ b/Overstrike/Detectors/StageModDetector.cs
+@@ -91,7 +91,7 @@ namespace Overstrike.Detectors {
+ 
+ 			string root = "";
+ 			foreach (var c in path) {
+-				if (c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar) break;
++				if (c == '\\' || c == '/') break; // explicit, so zips made on Windows also work on Linux
+ 				root += c;
+ 			}
+ 			return root;
+diff --git a/Overstrike/Installers/MSM2SuitStyleInstaller.cs b/Overstrike/Installers/MSM2SuitStyleInstaller.cs
+index 68b8684..7cd7085 100644
+--- a/Overstrike/Installers/MSM2SuitStyleInstaller.cs
++++ b/Overstrike/Installers/MSM2SuitStyleInstaller.cs
+@@ -362,7 +362,7 @@ namespace Overstrike.Installers {
+ 
+ 			var index = _toc.FindAssetIndex(0, assetId);
+ 			var archiveIndex = _toc.GetArchiveIndexByAssetIndex(index);
+-			var archivePath = Path.Combine(_gamePath, _toc.GetArchiveFilename((uint)archiveIndex));
++			var archivePath = DAT1.GamePaths.Resolve(_gamePath, _toc.GetArchiveFilename((uint)archiveIndex));
+ 			WriteArchive(archivePath, 0, assetId, config);
+ 		}
+ 
+diff --git a/Overstrike/Installers/ScriptInstaller.cs b/Overstrike/Installers/ScriptInstaller.cs
+index 6682b0c..2f55478 100644
+--- a/Overstrike/Installers/ScriptInstaller.cs
++++ b/Overstrike/Installers/ScriptInstaller.cs
+@@ -332,7 +332,7 @@ namespace Overstrike.Installers {
+ 
+ 				if (entry.FullName.Equals("info.json", StringComparison.OrdinalIgnoreCase)) continue;
+ 
+-				var path = Path.Combine(scriptsPath, entry.FullName);
++				var path = Path.Combine(scriptsPath, entry.FullName.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar));
+ 				try { Directory.CreateDirectory(Path.GetDirectoryName(path)); } catch {}
+ 
+ 				using var f = new FileStream(path, FileMode.Create, System.IO.FileAccess.Write, FileShare.None, bufferSize: 1024 * 1024);
+diff --git a/Overstrike/Installers/StageInstaller.cs b/Overstrike/Installers/StageInstaller.cs
+index bb3df56..64e6b23 100644
+--- a/Overstrike/Installers/StageInstaller.cs
++++ b/Overstrike/Installers/StageInstaller.cs
+@@ -55,7 +55,7 @@ namespace Overstrike.Installers {
+ 
+ 			var index = -1;
+ 			for (var i = 0; i < path.Length; ++i) {
+-				if (path[i] == Path.DirectorySeparatorChar || path[i] == Path.AltDirectorySeparatorChar) {
++				if (path[i] == '\\' || path[i] == '/') { // explicit, so zips made on Windows also work on Linux
+ 					index = i;
+ 					break;
+ 				}
+diff --git a/Overstrike/Utils/ErrorLogger.cs b/Overstrike/Utils/ErrorLogger.cs
+index 0b150a2..0f53f5d 100644
+--- a/Overstrike/Utils/ErrorLogger.cs
++++ b/Overstrike/Utils/ErrorLogger.cs
+@@ -3,6 +3,7 @@
+ // For more details, terms and conditions, see GNU General Public License.
+ // A copy of the that license should come with this program (LICENSE.txt). If not, see <http://www.gnu.org/licenses/>.
+ 
++using System;
+ using System.IO;
+ 
+ namespace Overstrike.Utils {
+@@ -17,7 +18,10 @@ namespace Overstrike.Utils {
+ 			WriteSeparator();
+ 		}
+ 
++		public static Action<string> Echo = null; // optional live output (used by the command-line build)
++
+ 		public static void WriteInfo(string info) {
++			try { Echo?.Invoke(info); } catch {}
+ 			try {
+ 				if (_log == null) {
+ 					_cachedContent += info;

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>SharpCompress</AssemblyName>
+    <NoWarn>$(NoWarn);CS1591;CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625;CS0618;SYSLIB0001</NoWarn>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)src/sharpcompress/src/SharpCompress/**/*.cs" Exclude="$(MSBuildThisFileDirectory)src/sharpcompress/src/SharpCompress/obj/**;$(MSBuildThisFileDirectory)src/sharpcompress/src/SharpCompress/bin/**" />
+  </ItemGroup>
+</Project>
