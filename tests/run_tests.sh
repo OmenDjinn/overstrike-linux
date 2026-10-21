@@ -71,6 +71,28 @@ python3 -c "import sys; open(sys.argv[1],'ab').write(b'\0'*16)" "$G/toc"
 cp "$G/toc" "$T/toc.updated"
 check "install --update-backup adopts the updated toc" '"$CLI" install --update-backup >/dev/null && cmp -s "$G/toc.BAK" "$T/toc.updated"'
 
+echo "script dependencies"
+python3 - "$T/mods" <<'EOF'
+import json, sys, zipfile
+def script(name, info):
+    with zipfile.ZipFile(f"{sys.argv[1]}/{name}.script", "w") as z:
+        z.writestr("info.json", json.dumps(dict(info, game="MSM2", type="script", version="1.0")))
+        z.writestr(f"{name}.dll", b"MZ")
+script("needs_lib", {"name": "NeedsLib", "dependencies": ["CoreLib"]})
+script("core_lib", {"name": "CoreLib"})  # no "dependencies" key at all
+script("needs_missing", {"name": "NeedsMissing", "dependencies": ["NotInstalled:2.0"]})
+EOF
+"$CLI" add "$T/mods/needs_lib.script" "$T/mods/core_lib.script" "$T/mods/needs_missing.script" >/dev/null
+touch "$HOME/.local/share/overstrike-cli/scripts_proxy.dll"
+"$CLI" scripts on >/dev/null
+"$CLI" install >"$T/out" 2>&1 || true
+check "unmet dependency is named in the error summary" 'grep -q "NotInstalled:2.0.* -- missing!" "$T/out"'
+check "script without a dependencies key still counts as present" '! grep -q "CoreLib.* -- missing!" "$T/out"'
+check "hint fits a dependency error" 'grep -q "Add the missing script mods" "$T/out" && ! grep -q reset-toc "$T/out"'
+"$CLI" disable NeedsMissing >/dev/null
+check "install succeeds once the dependency problem is gone" '"$CLI" install >/dev/null'
+"$CLI" scripts off >/dev/null
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

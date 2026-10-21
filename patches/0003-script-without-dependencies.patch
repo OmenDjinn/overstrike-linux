@@ -1,0 +1,11 @@
+--- a/Overstrike/Installers/ScriptInstaller.cs
++++ b/Overstrike/Installers/ScriptInstaller.cs
+@@ -83,7 +83,7 @@
+ 						ResolvedDependencies = new(),
+ 						Dll = dll
+ 					};
+-					foreach (var dep in info["dependencies"]) {
++					foreach (var dep in info["dependencies"] ?? new JArray()) { // a script without the key (often a library) used to be dropped as if missing
+ 						scriptDefinition.Dependencies.Add((string)dep);
+ 					}
+ 					return scriptDefinition;

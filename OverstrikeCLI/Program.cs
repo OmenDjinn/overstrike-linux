@@ -17,7 +17,7 @@ using Overstrike.Utils;
 
 namespace OverstrikeCli {
 	internal static partial class Program {
-		const string VERSION = "0.2.0";
+		const string VERSION = "1.0";
 
 		static string Home;
 		static string LibraryPath => Path.Combine(Home, "Mods Library");
@@ -267,7 +267,7 @@ Options:
 			// detect right away, so the user learns early if a file isn't a supported mod
 			var mods = new List<ModEntry>();
 			var warnings = new List<string>();
-			new ModsDetection().DetectInFiles(LibraryPath, copied, mods, warnings);
+			NewDetection().DetectInFiles(LibraryPath, copied, mods, warnings);
 			foreach (var w in warnings) Console.WriteLine($"Warning: {w}");
 			if (mods.Count == 0) {
 				Console.WriteLine("No supported mods were found in the added file(s).");
@@ -494,17 +494,43 @@ Options:
 			if (failed) {
 				var log = Path.Combine(Home, "errors.log");
 				Console.Error.WriteLine($"\nSomething went wrong. Details were written to:\n  {log}");
+				var unmetDependencies = false;
 				try {
 					var lines = File.ReadAllLines(log);
 					var start = Array.FindLastIndex(lines, l => l.Contains("Error occurred"));
 					if (start >= 0) {
+						unmetDependencies = PrintUnmetDependencies(lines, start);
 						Console.Error.WriteLine();
 						foreach (var l in lines.Skip(start).Take(12)) Console.Error.WriteLine("  " + l);
 					}
 				} catch {}
-				Console.Error.WriteLine("\nIf the game was updated recently, run 'overstrike-cli reset-toc', verify files in Steam, then install again.");
+				if (unmetDependencies) {
+					Console.Error.WriteLine("\nAdd the missing script mods to the Mods Library and enable them, or disable the mods that need them.");
+				} else {
+					Console.Error.WriteLine("\nIf the game was updated recently, run 'overstrike-cli reset-toc', verify files in Steam, then install again.");
+				}
 			}
 			return !failed;
+		}
+
+		// ScriptSupportInstaller logs every script and its dependencies before "Error occurred";
+		// print just the unmet ones, each under the script that needs it
+		static bool PrintUnmetDependencies(string[] lines, int errorLine) {
+			var session = Array.FindLastIndex(lines, errorLine, errorLine + 1, l => l.StartsWith(new string('-', 60))); // errors.log is appended to
+			var check = Array.FindLastIndex(lines, errorLine, errorLine + 1, l => l.Contains("Checking scripts dependencies"));
+			if (check < 0 || check < session) return false;
+			var found = false;
+			string script = null;
+			for (var i = check + 1; i < errorLine; ++i) {
+				var l = lines[i].Trim();
+				if (l.StartsWith("- '")) { script = l; continue; }
+				if (!l.Contains("-- missing!") && !l.Contains("-- no matches found")) continue;
+				if (!found) Console.Error.WriteLine("\nUnmet script dependencies:");
+				found = true;
+				if (script != null) { Console.Error.WriteLine($"  {script}"); script = null; }
+				Console.Error.WriteLine($"      {l}");
+			}
+			return found;
 		}
 
 		// Mirrors the GUI's TocMismatchDialog: after a game update, 'toc' differs from what we last wrote,
@@ -565,7 +591,7 @@ Options:
 			};
 			profile.Settings_Scripts_Enabled = on;
 			profile.Settings_Scripts_CommandLine = on && args.Contains("--commandline");
-			profile.Save();
+			if (!profile.Save()) throw new CliError($"Failed to save profile '{profile.Name}'.");
 			Console.WriteLine($"Scripts {(on ? "enabled" : "disabled")} for '{profile.Name}'. Run 'overstrike-cli install' to apply.");
 			if (on && !File.Exists(Path.Combine(Home, "scripts_proxy.dll"))) {
 				Console.WriteLine($"\nNote: copy 'scripts_proxy.dll' from the Windows Overstrike download into:\n  {Home}");
@@ -575,9 +601,16 @@ Options:
 
 		static int CmdLanguage(List<string> args, string profileOverride) {
 			var profile = CurrentProfile(profileOverride);
-			if (args.Count == 0) { Console.WriteLine($"Suit language: {profile.Settings_Suit_Language}"); return 0; }
-			profile.Settings_Suit_Language = args[0].ToLowerInvariant();
-			profile.Save();
+			var codes = SuitLanguages(profile.Game).Select(l => (string)l["code"]).Where(c => c != "").ToList();
+			if (args.Count == 0) {
+				Console.WriteLine($"Suit language: {profile.Settings_Suit_Language}");
+				if (codes.Count > 0) Console.WriteLine($"Available: {string.Join(", ", codes)}");
+				return 0;
+			}
+			var code = args[0].ToLowerInvariant();
+			if (codes.Count > 0 && !codes.Contains(code)) throw new CliError($"Unknown language '{args[0]}'. Available: {string.Join(", ", codes)}");
+			profile.Settings_Suit_Language = code;
+			if (!profile.Save()) throw new CliError($"Failed to save profile '{profile.Name}'.");
 			Console.WriteLine($"Suit language set to '{profile.Settings_Suit_Language}'.");
 			return 0;
 		}
@@ -632,10 +665,12 @@ Options:
 		#endregion
 		#region mods list (same rules as the GUI's MainWindow.MakeModsItems)
 
+		static ModsDetection NewDetection() => new CachedModsDetection(Path.Combine(Home, "library-cache.json"), VERSION);
+
 		static List<ModEntry> DetectLibrary(out List<string> warnings) {
 			var mods = new List<ModEntry>();
 			warnings = new List<string>();
-			new ModsDetection().Detect(LibraryPath, mods, warnings);
+			NewDetection().Detect(LibraryPath, mods, warnings);
 			return mods;
 		}
 
@@ -697,6 +732,7 @@ Options:
 			foreach (var r in refs) {
 				if (int.TryParse(r, out var n)) {
 					if (n < 1 || n > list.Count) throw new CliError($"There's no mod #{n} (run 'overstrike-cli list').");
+					if (result.Contains(n - 1)) continue;
 					result.Add(n - 1);
 					continue;
 				}

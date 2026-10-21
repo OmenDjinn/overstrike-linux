@@ -10,26 +10,26 @@ It uses Overstrike's own installer code, so it installs `.stage`, `.suit`, `.sui
 
 ### AppImage (with a window)
 
-Download `Overstrike-Linux-0.2.0-x86_64.AppImage`, make it executable, and run it:
+Download `Overstrike-Linux-1.0-x86_64.AppImage`, make it executable, and run it:
 
 ```sh
-chmod +x Overstrike-Linux-0.2.0-x86_64.AppImage
-./Overstrike-Linux-0.2.0-x86_64.AppImage
+chmod +x Overstrike-Linux-1.0-x86_64.AppImage
+./Overstrike-Linux-1.0-x86_64.AppImage
 ```
 
 You can also right-click it in your file manager → Properties → allow executing, then double-click it. On the first start it finds your games in Steam. Then add mods (button, or drag files onto the list), tick the ones you want, and click **Install mods**.
 
-The same file also runs the command-line tool: `./Overstrike-Linux-0.2.0-x86_64.AppImage cli list`.
+The same file also runs the command-line tool: `./Overstrike-Linux-1.0-x86_64.AppImage cli list`.
 
 If it doesn't start and mentions FUSE, install `fuse2`/`libfuse2` from your distro, or run it with `--appimage-extract-and-run`.
 
 ### Command line only
 
-Download `overstrike-cli-0.2.0-linux-x64.tar.gz` and extract it:
+Download `overstrike-cli-1.0-linux-x64.tar.gz` and extract it:
 
 ```sh
 mkdir -p ~/Applications
-tar xzf overstrike-cli-0.2.0-linux-x64.tar.gz -C ~/Applications
+tar xzf overstrike-cli-1.0-linux-x64.tar.gz -C ~/Applications
 ~/Applications/overstrike-cli/overstrike-cli --version
 ```
 

@@ -1,0 +1,17 @@
+# build output
+dist/
+native/
+OverstrikeCLI/bin/
+OverstrikeCLI/obj/
+tests/ReadCheck/bin/
+tests/ReadCheck/obj/
+appimage/build/
+appimage/appimagetool-*.AppImage
+__pycache__/
+
+# cloned and patched by build.sh
+upstream/
+vendor/src/
+
+# local notes for Claude Code
+CLAUDE.md

@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-1.0}"
 ARCH="${ARCH:-x86_64}"
 WORK="$ROOT/appimage/build"
 APPDIR="$WORK/Overstrike.AppDir"
@@ -32,6 +32,8 @@ echo "==> Pruning libraries the host system must provide"
 INTERNAL="$WORK/pyi-dist/overstrike-gui/_internal"
 # The GTK3 platform theme drags in all of GTK; Fusion + the desktop portal are enough.
 rm -f "$INTERNAL"/PySide6/Qt/plugins/platformthemes/libqgtk3.so
+# A distro PySide6 brings KDE's theme plugin, which can't work against the bundled Qt and breaks the file dialog's filters.
+rm -f "$INTERNAL"/PySide6/Qt/plugins/platformthemes/KDEPlasmaPlatformTheme6.so
 for lib in libgtk-3 libgdk-3 libgdk_pixbuf-2.0 libatk-1.0 libatk-bridge-2.0 libatspi libcairo libcairo-gobject \
 		libpango-1.0 libpangocairo-1.0 libpangoft2-1.0 libepoxy libdatrie libthai; do
 	rm -f "$INTERNAL/$lib".so*

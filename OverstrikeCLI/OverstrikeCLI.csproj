@@ -12,7 +12,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>overstrike-cli</AssemblyName>
     <RootNamespace>Overstrike</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>1.0</Version>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <NoWarn>$(NoWarn);CA2022;CS0168;CS0219;CS0414;CS0649;CS0169;CS8632;CA1416;SYSLIB0011</NoWarn>

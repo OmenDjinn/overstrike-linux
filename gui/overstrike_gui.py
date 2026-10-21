@@ -11,20 +11,22 @@ import shutil
 import subprocess
 import sys
 
-from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QPalette
+from PySide6.QtCore import QItemSelectionModel, QObject, QProcess, QProcessEnvironment, QSettings, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-    QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QSizePolicy, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 APP_NAME = "Overstrike for Linux"
-VERSION = "0.2.0"
+VERSION = "1.0"
 MOD_EXTENSIONS = "*.smpcmod *.mmpcmod *.suit *.suit_style *.stage *.modular *.script *.zip *.7z *.rar"
 PATH_ROLE = Qt.UserRole
 INFO_ROLE = Qt.UserRole + 1
+# lines Overstrike writes to errors.log for unmet .script dependencies
+DEPENDENCY_MARKERS = ("-- missing!", "-- no matches found")
 
 
 def resource_dir():
@@ -80,6 +82,7 @@ class Cli(QObject):
         self.path = path
         self.queue = []
         self.proc = None
+        self.closed = False
         env = QProcessEnvironment()
         for k, v in clean_env().items():
             env.insert(k, v)
@@ -89,6 +92,11 @@ class Cli(QObject):
         self.queue.append((args, done, stdin, stream))
         if self.proc is None:
             self._next()
+
+    def shutdown(self):
+        """The window is closing: drop queued commands and ignore the running one's output."""
+        self.closed = True
+        self.queue.clear()
 
     def run_sync(self, args, stdin=None, timeout=120):
         """For quick api calls where the answer is needed right away."""
@@ -110,18 +118,24 @@ class Cli(QObject):
         out_chunks, err_chunks = [], []
 
         def read_out():
+            if self.closed:
+                return
             text = bytes(proc.readAllStandardOutput()).decode(errors="replace")
             out_chunks.append(text)
             if stream:
                 self.output.emit(text)
 
         def read_err():
+            if self.closed:
+                return
             text = bytes(proc.readAllStandardError()).decode(errors="replace")
             err_chunks.append(text)
             if stream:
                 self.output.emit(text)
 
         def finished(code, _status):
+            if self.closed:
+                return
             read_out()
             read_err()
             self.proc = None
@@ -143,6 +157,8 @@ class Cli(QObject):
 class ModList(QTreeWidget):
     files_dropped = Signal(list)
     order_changed = Signal()
+    toggle_selected = Signal()
+    delete_pressed = Signal()
 
     def __init__(self):
         super().__init__()
@@ -158,6 +174,15 @@ class ModList(QTreeWidget):
         self.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.invisibleRootItem().setFlags(self.invisibleRootItem().flags() | Qt.ItemIsDropEnabled)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Space and len(self.selectedItems()) > 1:
+            self.toggle_selected.emit()
+            return
+        if e.key() == Qt.Key_Delete:
+            self.delete_pressed.emit()
+            return
+        super().keyPressEvent(e)
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -287,6 +312,8 @@ class MainWindow(QMainWindow):
         self.cli = cli
         self.state = None
         self.updating = False
+        self.logged_warnings = set()
+        self.settings = QSettings("overstrike-linux", "overstrike-gui")
         self.setWindowTitle(APP_NAME)
         self.resize(900, 640)
         icon = os.path.join(resource_dir(), "overstrike-linux.png")
@@ -302,6 +329,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         cli.output.connect(self.append_log)
         cli.busy_changed.connect(self._busy)
+        self.restore_layout()
 
         QTimer.singleShot(0, self.first_load)
 
@@ -311,8 +339,17 @@ class MainWindow(QMainWindow):
         m = self.menuBar().addMenu("&File")
         self._action(m, "Add mods...", self.add_mods_dialog, "Ctrl+O")
         self._action(m, "Open Mods Library folder", lambda: open_path(self.state["library"]) if self.state else None)
+        self._action(m, "Reload mods list", lambda: self.flush_then(self.refresh), "F5")
         m.addSeparator()
         self._action(m, "Quit", self.close, "Ctrl+Q")
+
+        m = self.menuBar().addMenu("&Mods")
+        self._action(m, "Enable all", lambda: self.set_checked(self.visible_items(), True), "Ctrl+Shift+E")
+        self._action(m, "Disable all", lambda: self.set_checked(self.visible_items(), False), "Ctrl+Shift+D")
+        self._action(m, "Invert selection of enabled", lambda: self.invert_checked(self.visible_items()))
+        m.addSeparator()
+        self._action(m, "Find...", lambda: (self.filter.setFocus(), self.filter.selectAll()), QKeySequence.Find)
+        self.mods_menu = m
 
         m = self.menuBar().addMenu("&Game")
         self._action(m, "Add game / profile...", self.add_game)
@@ -372,11 +409,17 @@ class MainWindow(QMainWindow):
         self.btn_remove.clicked.connect(self.remove_mods)
         self.btn_options = QPushButton("Options...")
         self.btn_options.clicked.connect(self.edit_options)
+        self.btn_enable_all = QPushButton("Enable all")
+        self.btn_enable_all.setToolTip("Tick every mod in the list (only the ones matching the filter, if there is one)")
+        self.btn_enable_all.clicked.connect(lambda: self.set_checked(self.visible_items(), True))
+        self.btn_disable_all = QPushButton("Disable all")
+        self.btn_disable_all.setToolTip("Untick every mod in the list (only the ones matching the filter, if there is one)")
+        self.btn_disable_all.clicked.connect(lambda: self.set_checked(self.visible_items(), False))
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("Filter mods")
         self.filter.setClearButtonEnabled(True)
         self.filter.textChanged.connect(self.apply_filter)
-        for w in (self.btn_add, self.btn_remove, self.btn_options):
+        for w in (self.btn_add, self.btn_remove, self.btn_options, self.btn_enable_all, self.btn_disable_all):
             tools.addWidget(w)
         tools.addStretch(1)
         tools.addWidget(self.filter)
@@ -388,9 +431,13 @@ class MainWindow(QMainWindow):
         self.mods.itemDoubleClicked.connect(lambda it, col: self.edit_options() if it.data(0, INFO_ROLE).get("modular") else None)
         self.mods.files_dropped.connect(self.add_files)
         self.mods.order_changed.connect(self.order_changed)
+        self.mods.toggle_selected.connect(lambda: self.invert_checked(self.mods.selectedItems()))
+        self.mods.delete_pressed.connect(self.remove_mods)
+        self.mods.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.mods.customContextMenuRequested.connect(self.mods_context_menu)
         ll.addWidget(self.mods)
         hint = QLabel("Tick mods to install them. Drag to change load order: mods lower in the list win. "
-                      "You can also drop mod files here.")
+                      "You can also drop mod files here. Right-click for more.")
         hint.setObjectName("dim")
         hint.setWordWrap(True)
         ll.addWidget(hint)
@@ -426,6 +473,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 1)
         split.setSizes([640, 260])
+        self.hsplit = split
 
         vsplit = QSplitter(Qt.Vertical)
         vsplit.addWidget(split)
@@ -437,6 +485,7 @@ class MainWindow(QMainWindow):
         vsplit.setStretchFactor(0, 4)
         vsplit.setStretchFactor(1, 1)
         vsplit.setSizes([470, 90])
+        self.vsplit = vsplit
         root.addWidget(vsplit, 1)
 
         # bottom bar
@@ -473,12 +522,15 @@ class MainWindow(QMainWindow):
             code, out, err = self.cli.run_sync(["setup"])
             self.append_log(out + err)
             self.refresh()
-            if not self.state["profiles"]:
+            if self.state is not None and not self.state["profiles"]:
                 QMessageBox.information(self, APP_NAME,
                                         "No supported game was found in your Steam libraries.\n"
                                         "Use \"Add game...\" to pick the game folder.")
 
     def refresh(self):
+        if self.apply_timer.isActive() and self.current:  # don't drop list edits that weren't saved yet
+            self.apply_timer.stop()
+            self.cli.run_sync(self.profile_args() + ["api", "apply"], stdin=self.mods_payload())
         code, out, err = self.cli.run_sync(["api", "state"])
         if code != 0:
             self.state = None
@@ -488,6 +540,9 @@ class MainWindow(QMainWindow):
         self.populate()
 
     def populate(self):
+        selected = {it.data(0, PATH_ROLE) for it in self.mods.selectedItems()}
+        current = self.mods.currentItem().data(0, PATH_ROLE) if self.mods.currentItem() else None
+        scroll = self.mods.verticalScrollBar().value()
         self.updating = True
         try:
             self.profile_combo.clear()
@@ -526,6 +581,11 @@ class MainWindow(QMainWindow):
                 if m["modular"]:
                     it.setToolTip(0, "Modular mod: double-click to pick its options.")
                 self.mods.addTopLevelItem(it)
+                if m["path"] in selected:
+                    it.setSelected(True)
+                if m["path"] == current:
+                    self.mods.setCurrentItem(it, 0, QItemSelectionModel.NoUpdate)
+            self.mods.verticalScrollBar().setValue(scroll)
 
             self.lang.clear()
             for l in cur["languages"]:
@@ -548,13 +608,11 @@ class MainWindow(QMainWindow):
             else:
                 self.scripts_note.setText("")
 
-            n = sum(1 for m in cur["mods"] if not m["suitsMenu"])
-            msg = f"{n} mod(s) in library"
-            if cur["skipped"]:
-                msg += f" ({cur['skipped']} for other games hidden)"
-            self.status.setText(msg)
+            self.update_count()
             for w in cur["warnings"]:
-                self.append_log("Warning: " + w + "\n")
+                if w not in self.logged_warnings:
+                    self.logged_warnings.add(w)
+                    self.append_log("Warning: " + w + "\n")
             self.apply_filter()
             self.update_buttons()
         finally:
@@ -567,12 +625,24 @@ class MainWindow(QMainWindow):
 
     def set_enabled(self, on):
         for w in (self.mods, self.btn_add, self.btn_remove, self.btn_options, self.btn_install,
-                  self.btn_uninstall, self.lang, self.scripts, self.commandline, self.filter):
+                  self.btn_uninstall, self.lang, self.scripts, self.commandline, self.filter,
+                  self.btn_enable_all, self.btn_disable_all, self.mods_menu):
             w.setEnabled(on)
+
+    def update_count(self):
+        if not self.current:
+            return
+        mods = [self.mods.topLevelItem(i) for i in range(self.mods.topLevelItemCount())]
+        mods = [it for it in mods if not it.data(0, INFO_ROLE)["suitsMenu"]]
+        on = sum(1 for it in mods if it.checkState(0) == Qt.Checked)
+        msg = f"{on} of {len(mods)} mod(s) enabled"
+        if self.current["skipped"]:
+            msg += f" ({self.current['skipped']} for other games hidden)"
+        self.status.setText(msg)
 
     def update_buttons(self):
         sel = [it.data(0, INFO_ROLE) for it in self.mods.selectedItems()]
-        self.btn_remove.setEnabled(bool(sel) and not any(m["suitsMenu"] for m in sel))
+        self.btn_remove.setEnabled(any(not m["suitsMenu"] for m in sel))
         self.btn_options.setEnabled(len(sel) == 1 and sel[0]["modular"])
 
     def apply_filter(self):
@@ -587,7 +657,77 @@ class MainWindow(QMainWindow):
 
     def item_changed(self, item, column):
         if not self.updating:
+            self.update_count()
             self.apply_timer.start()
+
+    def visible_items(self):
+        """Mods shown in the list (the filter hides the rest), without the Suits Menu entry."""
+        items = [self.mods.topLevelItem(i) for i in range(self.mods.topLevelItemCount())]
+        return [it for it in items if not it.isHidden() and not it.data(0, INFO_ROLE)["suitsMenu"]]
+
+    def set_checked(self, items, on):
+        self._set_states(items, lambda it: on)
+
+    def invert_checked(self, items):
+        self._set_states(items, lambda it: it.checkState(0) != Qt.Checked)
+
+    def _set_states(self, items, wanted):
+        changed = False
+        self.updating = True
+        try:
+            for it in items:
+                state = Qt.Checked if wanted(it) else Qt.Unchecked
+                if it.checkState(0) != state:
+                    it.setCheckState(0, state)
+                    changed = True
+        finally:
+            self.updating = False
+        if changed:
+            self.update_count()
+            self.apply_timer.start()
+
+    def move_selected(self, to_top):
+        items = [self.mods.topLevelItem(i) for i in range(self.mods.topLevelItemCount())]
+        sel = [it for it in items if it.isSelected() and not it.data(0, INFO_ROLE)["suitsMenu"]]
+        if not sel:
+            return
+        self.updating = True
+        try:
+            for it in sel:
+                self.mods.takeTopLevelItem(self.mods.indexOfTopLevelItem(it))
+            for n, it in enumerate(sel):
+                if to_top:
+                    self.mods.insertTopLevelItem(n, it)
+                else:
+                    self.mods.addTopLevelItem(it)
+                it.setSelected(True)
+        finally:
+            self.updating = False
+        self.mods.scrollToItem(sel[0] if to_top else sel[-1])
+        self.order_changed()
+
+    def mods_context_menu(self, pos):
+        if not self.current:
+            return
+        sel = [it for it in self.mods.selectedItems() if not it.data(0, INFO_ROLE)["suitsMenu"]]
+        menu = QMenu(self)
+        if sel:
+            menu.addAction("Enable selected", lambda: self.set_checked(sel, True))
+            menu.addAction("Disable selected", lambda: self.set_checked(sel, False))
+            if self.btn_options.isEnabled():
+                menu.addAction("Options...", self.edit_options)
+            menu.addSeparator()
+            if self.mods.dragDropMode() == QAbstractItemView.InternalMove:  # not while filtered
+                menu.addAction("Move to top", lambda: self.move_selected(True))
+                menu.addAction("Move to bottom", lambda: self.move_selected(False))
+                menu.addSeparator()
+            menu.addAction("Remove from library...", self.remove_mods)
+            menu.addSeparator()
+        menu.addAction("Enable all", lambda: self.set_checked(self.visible_items(), True))
+        menu.addAction("Disable all", lambda: self.set_checked(self.visible_items(), False))
+        menu.addSeparator()
+        menu.addAction("Open Mods Library folder", lambda: open_path(self.state["library"]))
+        menu.exec(self.mods.viewport().mapToGlobal(pos))
 
     def order_changed(self):
         # keep the Suits Menu entry last, like Overstrike does
@@ -624,7 +764,9 @@ class MainWindow(QMainWindow):
                    "commandline": self.commandline.isChecked() and self.scripts.isChecked(),
                    "language": self.lang.currentData() or ""}
         self.commandline.setEnabled(self.scripts.isChecked())
-        self.cli.run(self.profile_args() + ["api", "settings"], lambda c, o, e: self.refresh(), stdin=json.dumps(payload))
+        args = self.profile_args() + ["api", "settings"]
+        self.flush_then(lambda: self.cli.run(args, lambda c, o, e: (c != 0 and self.append_log(e or o), self.refresh()),
+                                             stdin=json.dumps(payload)))
 
     def switch_profile(self, index):
         name = self.profile_combo.itemData(index)
@@ -655,6 +797,7 @@ class MainWindow(QMainWindow):
 
     def remove_mods(self):
         sel = [it.data(0, INFO_ROLE) for it in self.mods.selectedItems()]
+        sel = [m for m in sel if not m["suitsMenu"]]
         if not sel:
             return
         names = "\n".join("  " + m["name"] for m in sel[:15]) + ("\n  ..." if len(sel) > 15 else "")
@@ -718,6 +861,7 @@ class MainWindow(QMainWindow):
             code, out, err = self.cli.run_sync(["profile", "delete", name])
             if code != 0:
                 QMessageBox.warning(self, "Delete profile", err or out)
+                return
             others = [p["name"] for p in self.state["profiles"] if p["name"] != name]
             if others:
                 self.cli.run_sync(["profile", "use", others[0]])
@@ -767,11 +911,25 @@ class MainWindow(QMainWindow):
         self.refresh()
         if code == 0:
             self.status.setText("Mods installed. Start the game from Steam.")
+            return
+        self.status.setText("Install failed, see log.")
+        deps = [l.strip() for l in (out + err).splitlines() if any(k in l for k in DEPENDENCY_MARKERS)]
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Install failed")
+        if deps:
+            box.setText("Some script mods need another script mod that isn't in the Mods Library or isn't enabled.")
+            box.setInformativeText("Unmet dependencies:\n" + "\n".join("  " + d for d in deps[:15]) +
+                                   "\n\nAdd and enable the missing mods, or disable the mods that need them.")
         else:
-            QMessageBox.warning(self, "Install failed",
-                                "Installing mods failed. See the log at the bottom for details.\n\n"
-                                "If the game was updated recently, use Game > Reset 'toc', verify the game "
-                                "files in Steam, then install again.")
+            box.setText("Installing mods failed. See the log at the bottom for details.")
+            box.setInformativeText("If the game was updated recently, use Game > Reset 'toc', verify the game "
+                                   "files in Steam, then install again.")
+        log = box.addButton("Open error log", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Ok)
+        box.exec()
+        if box.clickedButton() == log:
+            self.open_error_log()
 
     def uninstall(self):
         if not self.current:
@@ -781,9 +939,10 @@ class MainWindow(QMainWindow):
                                 "Your Mods Library is kept.") != QMessageBox.Yes:
             return
         self.log.clear()
-        self.cli.run(self.profile_args() + ["uninstall"],
-                     lambda c, o, e: (self.refresh(), self.status.setText("Game restored to vanilla." if c == 0 else "Uninstall failed, see log.")),
-                     stream=True)
+        self.flush_then(lambda: self.cli.run(
+            self.profile_args() + ["uninstall"],
+            lambda c, o, e: (self.refresh(), self.status.setText("Game restored to vanilla." if c == 0 else "Uninstall failed, see log.")),
+            stream=True))
 
     def reset_toc(self):
         if not self.current:
@@ -794,7 +953,7 @@ class MainWindow(QMainWindow):
                                 "Verify integrity of game files. Then install mods again.\n\nContinue?") != QMessageBox.Yes:
             return
         self.log.clear()
-        self.cli.run(self.profile_args() + ["-y", "reset-toc"], lambda c, o, e: self.refresh(), stream=True)
+        self.flush_then(lambda: self.cli.run(self.profile_args() + ["-y", "reset-toc"], lambda c, o, e: self.refresh(), stream=True))
 
     def show_launch_options(self):
         code, out, err = self.cli.run_sync(self.profile_args() + ["launch-options"])
@@ -839,14 +998,27 @@ class MainWindow(QMainWindow):
         for w in (self.btn_install, self.btn_uninstall):
             w.setEnabled(not busy and self.current is not None)
 
+    def restore_layout(self):
+        for key, restore in (("geometry", self.restoreGeometry), ("hsplit", self.hsplit.restoreState),
+                             ("vsplit", self.vsplit.restoreState)):
+            value = self.settings.value(key)
+            if value is not None:
+                restore(value)
+
     def closeEvent(self, e):
-        if self.apply_timer.isActive():
-            self.apply_timer.stop()
-            self.cli.run_sync(self.profile_args() + ["api", "apply"], stdin=self.mods_payload())
         if self.cli.proc is not None:
-            if QMessageBox.question(self, APP_NAME, "An operation is still running. Quit anyway?") != QMessageBox.Yes:
+            if QMessageBox.question(self, APP_NAME,
+                                    "An operation is still running. Quitting now can leave the game's files "
+                                    "half-written.\n\nQuit anyway?") != QMessageBox.Yes:
                 e.ignore()
                 return
+            self.cli.shutdown()
+        if self.apply_timer.isActive() and self.current:
+            self.apply_timer.stop()
+            self.cli.run_sync(self.profile_args() + ["api", "apply"], stdin=self.mods_payload())
+        self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("hsplit", self.hsplit.saveState())
+        self.settings.setValue("vsplit", self.vsplit.saveState())
         e.accept()
 
 

@@ -1,0 +1,119 @@
+diff --git a/Overstrike/Detectors/ModsDetection.cs b/Overstrike/Detectors/ModsDetection.cs
+index 524d113..858fea0 100644
+--- a/Overstrike/Detectors/ModsDetection.cs
++++ b/Overstrike/Detectors/ModsDetection.cs
+@@ -84,7 +84,7 @@ namespace Overstrike.Detectors {
+ 
+ 				foreach (var extension in detectors.Keys) {
+ 					if (entry.Key.EndsWith("." + extension, StringComparison.OrdinalIgnoreCase)) {
+-						using var file = new MemoryStream();
++						using var file = new MemoryStream(entry.Size > 0 && entry.Size < int.MaxValue ? (int)entry.Size : 0);
+ 						using (var entryStream = entry.OpenEntryStream()) {
+ 							entryStream.CopyTo(file, 1024 * 1024);
+ 						}
+diff --git a/Overstrike/Utils/NestedFiles.cs b/Overstrike/Utils/NestedFiles.cs
+index 90a7406..9ecd688 100644
+--- a/Overstrike/Utils/NestedFiles.cs
++++ b/Overstrike/Utils/NestedFiles.cs
+@@ -5,6 +5,7 @@
+ 
+ using SharpCompress.Archives;
+ using System;
++using System.Collections.Generic;
+ using System.IO;
+ using System.IO.Compression;
+ 
+@@ -22,18 +23,86 @@ namespace Overstrike.Utils {
+ 			return new ZipArchive(GetNestedFile(fullPath));
+ 		}
+ 
++		// Extracted entries stay in memory for the rest of the run. Installing a .modular reads the same
++		// archive once per selected option, and decompressing it again every time was most of the install.
++		private static readonly object _cacheLock = new();
++		private static readonly LinkedList<(string Key, byte[] Data, int Length)> _cache = new(); // most recent first
++		private static long _cacheSize = 0;
++		private static readonly long CACHE_LIMIT = Math.Min(2L << 30, GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 4);
++
+ 		public static Stream GetNestedFile(string path) {
+-			var index = path.IndexOf("||");
+-			if (index != -1) {
+-				string basefile = path.Substring(0, index);
+-				string rest = path.Substring(index + 2);
++			var parts = path.Split("||");
++			if (parts.Length == 1) {
++				return File.OpenRead(path);
++			}
++
++			// start from the deepest level that's already extracted
++			byte[] data = null;
++			int length = 0;
++			var level = parts.Length - 1;
++			while (level > 0 && !TryGetCached(string.Join("||", parts, 0, level + 1), out data, out length)) {
++				--level;
++			}
++
++			for (++level; level < parts.Length; ++level) {
++				using Stream source = (level == 1 ? File.OpenRead(parts[0]) : new MemoryStream(data, 0, length, false));
++				using var archive = ArchiveFactory.OpenArchive(source);
++				if (!ExtractEntry(archive, parts[level], out data, out length)) {
++					return null;
++				}
++				AddToCache(string.Join("||", parts, 0, level + 1), data, length);
++			}
++
++			return new MemoryStream(data, 0, length, false, true);
++		}
++
++		private static bool ExtractEntry(IArchive archive, string name, out byte[] data, out int length) {
++			foreach (var entry in archive.Entries) {
++				if (entry.IsDirectory) continue;
++				if (entry.Key.Equals(name, StringComparison.OrdinalIgnoreCase)) {
++					var file = new MemoryStream(entry.Size > 0 && entry.Size < int.MaxValue ? (int)entry.Size : 0);
++					using (var entryStream = entry.OpenEntryStream()) {
++						entryStream.CopyTo(file, 1024 * 1024);
++					}
++					data = file.GetBuffer();
++					length = (int)file.Length;
++					return true;
++				}
++			}
+ 
+-				using (var archive = ArchiveFactory.OpenArchive(File.OpenRead(basefile))) {
+-					return GetNestedFile(archive, rest);
++			data = null;
++			length = 0;
++			return false;
++		}
++
++		private static bool TryGetCached(string key, out byte[] data, out int length) {
++			lock (_cacheLock) {
++				for (var node = _cache.First; node != null; node = node.Next) {
++					if (node.Value.Key != key) continue;
++					_cache.Remove(node);
++					_cache.AddFirst(node);
++					data = node.Value.Data;
++					length = node.Value.Length;
++					return true;
+ 				}
+ 			}
+ 
+-			return File.OpenRead(path);
++			data = null;
++			length = 0;
++			return false;
++		}
++
++		private static void AddToCache(string key, byte[] data, int length) {
++			if (data.LongLength > CACHE_LIMIT) return;
++
++			lock (_cacheLock) {
++				while (_cache.Count > 0 && _cacheSize + data.LongLength > CACHE_LIMIT) {
++					_cacheSize -= _cache.Last.Value.Data.LongLength;
++					_cache.RemoveLast();
++				}
++				_cache.AddFirst((key, data, length));
++				_cacheSize += data.LongLength;
++			}
+ 		}
+ 
+ 		public static Stream GetNestedFile(IArchive archive, string path) {

@@ -175,8 +175,7 @@ namespace OverstrikeCli {
 			if (set) {
 				foreach (var spec in args.Skip(1)) {
 					var parts = spec.Split('=');
-					var m = int.Parse(parts[0]);
-					var o = int.Parse(parts[1]);
+					if (parts.Length != 2 || !int.TryParse(parts[0], out var m) || !int.TryParse(parts[1], out var o)) throw new CliError($"Bad option '{spec}'.");
 					if (m < 0 || m >= modules.Count || o < 0 || o >= modules[m].Options.Count) throw new CliError($"Bad option '{spec}'.");
 					selected[m] = o;
 				}
@@ -229,7 +228,7 @@ namespace OverstrikeCli {
 			foreach (var p in paths) {
 				var outer = p.Contains("||") ? p[..p.IndexOf("||")] : p;
 				var full = Path.GetFullPath(Path.Combine(LibraryPath, outer));
-				if (!full.StartsWith(libraryFull)) throw new CliError($"'{p}' is outside the Mods Library.");
+				if (!full.StartsWith(libraryFull, StringComparison.Ordinal)) throw new CliError($"'{p}' is outside the Mods Library.");
 				if (File.Exists(full)) { File.Delete(full); removed.Add(outer); }
 			}
 			return new JObject { ["removed"] = removed };
