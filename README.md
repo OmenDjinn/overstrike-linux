@@ -33,7 +33,7 @@ tar xzf overstrike-cli-1.0-linux-x64.tar.gz -C ~/Applications
 ~/Applications/overstrike-cli/overstrike-cli --version
 ```
 
-The prebuilt AppImage and binary work on distros with **glibc 2.38 or newer**. That includes Arch, CachyOS, Bazzite, SteamOS 3.6+, Fedora 39+, Ubuntu 24.04+ and Mint 22+. On older distros (Debian 12, Ubuntu 22.04), use the portable build with the .NET 10 runtime, or build it from source (see below).
+The prebuilt AppImage works on distros with **glibc 2.31 or newer**, and the command-line binary on glibc 2.27 or newer. That includes SteamOS, Arch, CachyOS, Bazzite, Fedora, Debian 11+, Ubuntu 20.04+ and Mint 20+.
 
 Optional, so you can type `overstrike-cli` from anywhere:
 
@@ -130,8 +130,11 @@ Copy your Windows `Mods Library` and `Profiles` folders into `~/.local/share/ove
 ./build.sh                    # self-contained build → dist/overstrike-cli/
 ./build.sh --portable         # needs the .NET 10 runtime to run
 tests/run_tests.sh            # end-to-end tests against a fake game install
-appimage/build-appimage.sh    # GUI + CLI AppImage → dist/ (needs: pip install PySide6-Essentials pyinstaller)
+appimage/build-in-container.sh  # release AppImage → dist/ (needs docker or podman)
+appimage/build-appimage.sh    # same, built on your own system (needs: pip install PySide6-Essentials pyinstaller)
 ```
+
+Release AppImages are built with `appimage/build-in-container.sh`, which freezes the GUI on Ubuntu 20.04. PyInstaller bundles the Python and Qt libraries of whatever system it runs on, so an AppImage built on a current distro needs that distro's glibc. `build-appimage.sh` checks every bundled library and stops if one needs more than glibc 2.31; for a build only you will run, set `MAX_GLIBC=2.99`.
 
 The GUI (`gui/overstrike_gui.py`, Qt/PySide6) is a thin layer: every action runs `overstrike-cli`, and it reads state through `overstrike-cli api ...` (JSON). You can also run it straight from source with `python3 gui/overstrike_gui.py` after building the CLI.
 

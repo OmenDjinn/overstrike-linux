@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Packs overstrike-cli + the Qt GUI into one AppImage.
 #
+# For release builds use appimage/build-in-container.sh, which runs this on glibc 2.31.
+#
 # Needs: a finished ./build.sh (dist/overstrike-cli), python3 with PySide6 and pyinstaller
 #   (pip install PySide6-Essentials pyinstaller), and appimagetool
 #   (https://github.com/AppImage/appimagetool/releases -- set APPIMAGETOOL=/path/to/it,
@@ -45,6 +47,11 @@ for lib in libstdc++.so.6 libgcc_s.so.1 libGL.so.1 libEGL.so.1 libGLdispatch.so.
 		libasound.so.2 libfontconfig.so.1 libfreetype.so.6 libharfbuzz.so.0 libcom_err.so.2 libexpat.so.1 \
 		libgpg-error.so.0 libICE.so.6 libSM.so.6 libusb-1.0.so.0 libuuid.so.1 libz.so.1 libjack.so.0 \
 		libpipewire-0.3.so.0 libxcb-dri3.so.0 libxcb-dri2.so.0 libfribidi.so.0 libgmp.so.10; do
+	rm -f "$INTERNAL/$lib"
+done
+# glibc itself is never bundled (a copy of libmvec etc. would need the build machine's glibc).
+for lib in libc.so.6 libm.so.6 libmvec.so.1 libpthread.so.0 libdl.so.2 librt.so.1 libutil.so.1 libresolv.so.2 \
+		libanl.so.1 libnsl.so.1 libBrokenLocale.so.1 ld-linux-x86-64.so.2 ld-linux-aarch64.so.1; do
 	rm -f "$INTERNAL/$lib"
 done
 
@@ -101,6 +108,11 @@ cat > "$APPDIR/usr/share/metainfo/overstrike-linux.appdata.xml" <<EOF
   <content_rating type="oars-1.1"/>
 </component>
 EOF
+
+echo "==> glibc compatibility (MAX_GLIBC=${MAX_GLIBC:-2.31})"
+# Everything must load on the oldest supported host. A newer build machine fails here:
+# use appimage/build-in-container.sh, or MAX_GLIBC=2.99 for a local-only build.
+"$ROOT/appimage/check-glibc.sh" "$APPDIR" "${MAX_GLIBC:-2.31}"
 
 echo "==> AppImage"
 TOOL="${APPIMAGETOOL:-$ROOT/appimage/appimagetool-$ARCH.AppImage}"
