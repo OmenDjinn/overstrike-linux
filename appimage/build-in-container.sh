@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 ENGINE="${ENGINE:-$(command -v podman || command -v docker)}"
 IMAGE=overstrike-linux-build:focal
 "$ENGINE" build -t "$IMAGE" -f appimage/Containerfile appimage
-"$ENGINE" run --rm -v "$PWD:/src:Z" -w /src -e VERSION="${VERSION:-1.0}" -e HOST_ID="$(id -u):$(id -g)" \
+"$ENGINE" run --rm -v "$PWD:/src:Z" -w /src -e VERSION="${VERSION:-1.0.1}" -e HOST_ID="$(id -u):$(id -g)" \
 	${ENGINE_RUN_ARGS:-} "$IMAGE" \
 	bash -c 'trap "chown -R \$HOST_ID /src/dist /src/appimage 2>/dev/null || true" EXIT
 		appimage/build-appimage.sh'

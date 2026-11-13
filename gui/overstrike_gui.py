@@ -1038,7 +1038,12 @@ def apply_theme(app):
     app.setStyle("Fusion")
     dark = False
     try:
-        dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        scheme = app.styleHints().colorScheme()
+        dark = scheme == Qt.ColorScheme.Dark
+        # Older Qt (the AppImage's 6.9) can't read KDE's scheme and reports Unknown,
+        # but still hands us the desktop's dark palette: go by its brightness then.
+        if scheme == Qt.ColorScheme.Unknown:
+            dark = app.palette().window().color().lightness() < 128
     except Exception:
         pass
     if os.environ.get("OVERSTRIKE_THEME") in ("dark", "light"):

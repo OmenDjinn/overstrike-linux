@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-VERSION="${VERSION:-1.0}"
+VERSION="${VERSION:-1.0.1}"
 ARCH="${ARCH:-x86_64}"
 WORK="$ROOT/appimage/build"
 APPDIR="$WORK/Overstrike.AppDir"
